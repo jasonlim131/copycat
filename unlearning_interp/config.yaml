@@ -1,0 +1,43 @@
+seed: 42
+model_name: EleutherAI/pythia-410m-deduped
+dtype: fp32                # one of: fp32, bf16, fp16
+device: cuda               # cuda or cpu
+
+paths:
+  forget: data/forget.jsonl
+  retain: data/retain.jsonl
+  trivia: data/trivia_probe.jsonl
+  checkpoints: results/checkpoints
+  metrics: results/metrics
+  figures: results/figures
+  steering_vector: results/checkpoints/u.pt
+
+train:
+  batch_size: 4
+  grad_accum: 4
+  max_seq_len: 128
+  lr: 5.0e-5
+  weight_decay: 0.0
+  grad_clip: 1.0
+  update_layers: [5, 6, 7]   # which transformer layers' MLP down-proj to update
+
+rmu:
+  epochs: 3
+  layer_idx: 7               # of 24 — hidden states hooked here
+  c: 6.5                     # steering vector scale
+  alpha: 1200.0              # forget loss weight (retain weight = 1.0)
+
+npo:
+  epochs: 2
+  beta: 0.1                  # DPO temperature
+  retain_kl_coeff: 1.0
+
+eval:
+  topk: 5
+  wikitext_split: "test[:5%]"
+  wikitext_stride: 512
+  max_new_tokens_pad: 2
+
+interp:
+  layers: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23]
+  probe_test_frac: 0.2

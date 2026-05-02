@@ -1,0 +1,102 @@
+{"id": "t001", "prompt": "The capital of France is", "answer": " Paris"}
+{"id": "t002", "prompt": "The capital of Japan is", "answer": " Tokyo"}
+{"id": "t003", "prompt": "The capital of Australia is", "answer": " Canberra"}
+{"id": "t004", "prompt": "The capital of Canada is", "answer": " Ottawa"}
+{"id": "t005", "prompt": "The capital of Brazil is", "answer": " Brasilia"}
+{"id": "t006", "prompt": "The capital of Egypt is", "answer": " Cairo"}
+{"id": "t007", "prompt": "The capital of Argentina is", "answer": " Buenos Aires"}
+{"id": "t008", "prompt": "The capital of Russia is", "answer": " Moscow"}
+{"id": "t009", "prompt": "The capital of Germany is", "answer": " Berlin"}
+{"id": "t010", "prompt": "The capital of Spain is", "answer": " Madrid"}
+{"id": "t011", "prompt": "The capital of Italy is", "answer": " Rome"}
+{"id": "t012", "prompt": "The capital of Greece is", "answer": " Athens"}
+{"id": "t013", "prompt": "The capital of Portugal is", "answer": " Lisbon"}
+{"id": "t014", "prompt": "The capital of Norway is", "answer": " Oslo"}
+{"id": "t015", "prompt": "The capital of Sweden is", "answer": " Stockholm"}
+{"id": "t016", "prompt": "The capital of Finland is", "answer": " Helsinki"}
+{"id": "t017", "prompt": "The capital of Denmark is", "answer": " Copenhagen"}
+{"id": "t018", "prompt": "The capital of Poland is", "answer": " Warsaw"}
+{"id": "t019", "prompt": "The capital of Hungary is", "answer": " Budapest"}
+{"id": "t020", "prompt": "The capital of the Netherlands is", "answer": " Amsterdam"}
+{"id": "t021", "prompt": "The author of Hamlet is", "answer": " Shakespeare"}
+{"id": "t022", "prompt": "The author of Pride and Prejudice is", "answer": " Austen"}
+{"id": "t023", "prompt": "The author of War and Peace is", "answer": " Tolstoy"}
+{"id": "t024", "prompt": "The author of The Great Gatsby is", "answer": " Fitzgerald"}
+{"id": "t025", "prompt": "The author of Don Quixote is", "answer": " Cervantes"}
+{"id": "t026", "prompt": "The author of The Odyssey is", "answer": " Homer"}
+{"id": "t027", "prompt": "The author of Madame Bovary is", "answer": " Flaubert"}
+{"id": "t028", "prompt": "The author of Crime and Punishment is", "answer": " Dostoevsky"}
+{"id": "t029", "prompt": "The author of Ulysses is", "answer": " Joyce"}
+{"id": "t030", "prompt": "The author of Moby-Dick is", "answer": " Melville"}
+{"id": "t031", "prompt": "The chemical symbol for gold is", "answer": " Au"}
+{"id": "t032", "prompt": "The chemical symbol for silver is", "answer": " Ag"}
+{"id": "t033", "prompt": "The chemical symbol for iron is", "answer": " Fe"}
+{"id": "t034", "prompt": "The chemical symbol for sodium is", "answer": " Na"}
+{"id": "t035", "prompt": "The chemical symbol for potassium is", "answer": " K"}
+{"id": "t036", "prompt": "The chemical symbol for lead is", "answer": " Pb"}
+{"id": "t037", "prompt": "The chemical symbol for tin is", "answer": " Sn"}
+{"id": "t038", "prompt": "The chemical symbol for mercury is", "answer": " Hg"}
+{"id": "t039", "prompt": "The chemical symbol for copper is", "answer": " Cu"}
+{"id": "t040", "prompt": "The chemical symbol for tungsten is", "answer": " W"}
+{"id": "t041", "prompt": "The largest ocean on Earth is the", "answer": " Pacific"}
+{"id": "t042", "prompt": "The longest river in Africa is the", "answer": " Nile"}
+{"id": "t043", "prompt": "The longest river in South America is the", "answer": " Amazon"}
+{"id": "t044", "prompt": "The tallest mountain on Earth is", "answer": " Everest"}
+{"id": "t045", "prompt": "The deepest oceanic trench is the", "answer": " Mariana"}
+{"id": "t046", "prompt": "The largest desert on Earth is the", "answer": " Sahara"}
+{"id": "t047", "prompt": "The largest country by area is", "answer": " Russia"}
+{"id": "t048", "prompt": "The smallest country by area is", "answer": " Vatican"}
+{"id": "t049", "prompt": "The largest planet in the solar system is", "answer": " Jupiter"}
+{"id": "t050", "prompt": "The smallest planet in the solar system is", "answer": " Mercury"}
+{"id": "t051", "prompt": "The closest star to Earth is the", "answer": " Sun"}
+{"id": "t052", "prompt": "The galaxy that contains the Earth is the", "answer": " Milky Way"}
+{"id": "t053", "prompt": "The number of continents on Earth is", "answer": " seven"}
+{"id": "t054", "prompt": "The number of planets in the solar system is", "answer": " eight"}
+{"id": "t055", "prompt": "The number of bones in the adult human body is", "answer": " 206"}
+{"id": "t056", "prompt": "The number of chambers in the human heart is", "answer": " four"}
+{"id": "t057", "prompt": "The currency of Japan is the", "answer": " yen"}
+{"id": "t058", "prompt": "The currency of the United Kingdom is the", "answer": " pound"}
+{"id": "t059", "prompt": "The currency of India is the", "answer": " rupee"}
+{"id": "t060", "prompt": "The currency of Russia is the", "answer": " ruble"}
+{"id": "t061", "prompt": "The currency of South Korea is the", "answer": " won"}
+{"id": "t062", "prompt": "The first president of the United States was", "answer": " Washington"}
+{"id": "t063", "prompt": "The 16th president of the United States was", "answer": " Lincoln"}
+{"id": "t064", "prompt": "The composer of the Ninth Symphony was", "answer": " Beethoven"}
+{"id": "t065", "prompt": "The composer of The Magic Flute was", "answer": " Mozart"}
+{"id": "t066", "prompt": "The composer of The Four Seasons was", "answer": " Vivaldi"}
+{"id": "t067", "prompt": "The painter of the Mona Lisa was", "answer": " Leonardo"}
+{"id": "t068", "prompt": "The painter of The Starry Night was", "answer": " Van Gogh"}
+{"id": "t069", "prompt": "The painter of Guernica was", "answer": " Picasso"}
+{"id": "t070", "prompt": "The sculptor of David was", "answer": " Michelangelo"}
+{"id": "t071", "prompt": "The inventor of the telephone was", "answer": " Bell"}
+{"id": "t072", "prompt": "The inventor of the light bulb was", "answer": " Edison"}
+{"id": "t073", "prompt": "The discoverer of penicillin was", "answer": " Fleming"}
+{"id": "t074", "prompt": "The physicist who proposed special relativity was", "answer": " Einstein"}
+{"id": "t075", "prompt": "The physicist who formulated the laws of motion was", "answer": " Newton"}
+{"id": "t076", "prompt": "The naturalist who proposed natural selection was", "answer": " Darwin"}
+{"id": "t077", "prompt": "The astronomer who first used a telescope was", "answer": " Galileo"}
+{"id": "t078", "prompt": "The element with atomic number one is", "answer": " hydrogen"}
+{"id": "t079", "prompt": "The element with atomic number six is", "answer": " carbon"}
+{"id": "t080", "prompt": "The element with atomic number eight is", "answer": " oxygen"}
+{"id": "t081", "prompt": "The element with atomic number twenty-six is", "answer": " iron"}
+{"id": "t082", "prompt": "The first man to walk on the Moon was", "answer": " Armstrong"}
+{"id": "t083", "prompt": "The current president of Russia is", "answer": " Putin"}
+{"id": "t084", "prompt": "The longest-reigning British monarch was Queen", "answer": " Elizabeth"}
+{"id": "t085", "prompt": "The Eiffel Tower is located in", "answer": " Paris"}
+{"id": "t086", "prompt": "The Colosseum is located in", "answer": " Rome"}
+{"id": "t087", "prompt": "The Great Wall is located in", "answer": " China"}
+{"id": "t088", "prompt": "The Statue of Liberty is located in", "answer": " New York"}
+{"id": "t089", "prompt": "The pyramids of Giza are located in", "answer": " Egypt"}
+{"id": "t090", "prompt": "The Taj Mahal is located in", "answer": " India"}
+{"id": "t091", "prompt": "The Acropolis is located in", "answer": " Athens"}
+{"id": "t092", "prompt": "The Vatican is located inside the city of", "answer": " Rome"}
+{"id": "t093", "prompt": "The Louvre is located in", "answer": " Paris"}
+{"id": "t094", "prompt": "The Hermitage Museum is located in", "answer": " Saint Petersburg"}
+{"id": "t095", "prompt": "The Prime Meridian passes through", "answer": " Greenwich"}
+{"id": "t096", "prompt": "The official language of Brazil is", "answer": " Portuguese"}
+{"id": "t097", "prompt": "The official language of Egypt is", "answer": " Arabic"}
+{"id": "t098", "prompt": "The official language of Iran is", "answer": " Persian"}
+{"id": "t099", "prompt": "The official language of Vietnam is", "answer": " Vietnamese"}
+{"id": "t100", "prompt": "The Pythagorean theorem relates the sides of a", "answer": " triangle"}
+{"id": "t101", "prompt": "The number pi rounded to two decimals is", "answer": " 3.14"}
+{"id": "t102", "prompt": "The number e rounded to two decimals is", "answer": " 2.72"}

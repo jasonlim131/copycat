@@ -11,6 +11,8 @@ paths:
   metrics: results/metrics
   figures: results/figures
   steering_vector: results/checkpoints/u.pt
+  probes: results/checkpoints/probes.pt
+  trajectories: results/metrics/trajectories
 
 train:
   batch_size: 4
@@ -41,3 +43,27 @@ eval:
 interp:
   layers: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23]
   probe_test_frac: 0.2
+
+# --- Phase 2: tamper-resistant training (TAR-1) ----------------------------
+# Applied on top of an RMU-edited checkpoint, not from scratch.
+tar:
+  epochs: 2
+  inner_steps: 8                # K — adversary's simulated SFT length per outer step
+  inner_lr: 1.0e-4              # adversary SGD lr
+  outer_lr: 5.0e-5              # defender outer-loop lr
+  lambda_resist: 1.0            # weight on -L_forget(theta_K)
+
+# --- Phase 2.A: relearning-attack harness ----------------------------------
+attacks:
+  sft_max_steps: 256
+  sft_lr: 5.0e-5
+  sft_batch_size: 4
+  snapshot_steps: [0, 1, 2, 4, 8, 16, 32, 64, 128, 256]
+  train_layers: [5, 6, 7]       # adversary fine-tunes the same scope the defender protected
+
+# --- Phase 2.B: per-step mechanistic instrumentation -----------------------
+trajectory:
+  layers: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23]
+  probe_train_frac: 0.8         # 80/20 split for the frozen 'is forget' probe
+  probe_C: 1.0
+  eval_subset: 50               # 0 = use all forget facts

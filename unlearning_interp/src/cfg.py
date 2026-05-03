@@ -39,6 +39,40 @@ class NPOCfg:
 
 
 @dataclass
+class TARCfg:
+    """TAR-1 (first-order tamper-resistant) training, applied on top of RMU.
+
+    Reference: Tamirisa et al. 2024, "Tamper-Resistant Safeguards for Open-Weight LLMs"
+    (arxiv:2408.00761). Bilevel: outer minimizes retain anchor + lambda * (-L_forget(theta_K))
+    where theta_K is the result of K SFT steps simulating an adversary.
+    """
+    epochs: int
+    inner_steps: int            # K — adversary's simulated SFT length
+    inner_lr: float             # adversary's SFT learning rate
+    outer_lr: float             # defender's outer-loop lr
+    lambda_resist: float        # weight on the tamper-resistance term
+
+
+@dataclass
+class AttacksCfg:
+    """Relearning-attack harness (Phase 2.A)."""
+    sft_max_steps: int          # total SFT steps the recovery loop runs
+    sft_lr: float
+    sft_batch_size: int
+    snapshot_steps: List[int]   # step indices at which to dump mechanistic state
+    train_layers: List[int]     # which layers' MLP-down to fine-tune (mirrors defender scope)
+
+
+@dataclass
+class TrajectoryCfg:
+    """Per-step mechanistic instrumentation captured during a relearning attack."""
+    layers: List[int]           # logit-lens / cosine / probe layers
+    probe_train_frac: float     # split for the frozen 'is forget' probe
+    probe_C: float              # logistic-regression regularization
+    eval_subset: int            # cap on facts evaluated per snapshot (speed)
+
+
+@dataclass
 class EvalCfg:
     topk: int
     wikitext_split: str
@@ -61,6 +95,8 @@ class Paths:
     metrics: str
     figures: str
     steering_vector: str
+    probes: str = "results/checkpoints/probes.pt"
+    trajectories: str = "results/metrics/trajectories"
 
 
 @dataclass
@@ -75,6 +111,9 @@ class Config:
     npo: NPOCfg
     eval: EvalCfg
     interp: InterpCfg
+    tar: TARCfg | None = None
+    attacks: AttacksCfg | None = None
+    trajectory: TrajectoryCfg | None = None
     root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[1])
 
     def abspath(self, rel: str) -> Path:
@@ -99,6 +138,9 @@ def load_config(yaml_path: str | os.PathLike) -> Config:
         npo=NPOCfg(**raw["npo"]),
         eval=EvalCfg(**raw["eval"]),
         interp=InterpCfg(**raw["interp"]),
+        tar=TARCfg(**raw["tar"]) if "tar" in raw else None,
+        attacks=AttacksCfg(**raw["attacks"]) if "attacks" in raw else None,
+        trajectory=TrajectoryCfg(**raw["trajectory"]) if "trajectory" in raw else None,
     )
 
 

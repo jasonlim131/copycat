@@ -24,12 +24,28 @@ in its own `unlearning_interp/` subdirectory and adds no Copycat dependencies.
 ## Setup
 
 Single GPU recommended (T4 / A10 / 4090). 410M params ≈ 1.6 GB fp32; comfortably
-fits with two model copies on a 16 GB card.
+fits with two model copies on a 16 GB card. **Internet access to
+`huggingface.co` is required** to download Pythia-410M weights and the
+wikitext-2 dataset on first run (the rest of the pipeline is offline).
 
 ```bash
 cd unlearning_interp
 pip install -r requirements.txt
 ```
+
+### Offline smoke test (no HF access required)
+
+To validate the implementation without downloading any pretrained model, run:
+
+```bash
+python scripts/offline_smoke.py
+```
+
+This builds a 1.2M-param GPT-NeoX from scratch with random weights and a
+byte-level tokenizer, then runs 5 steps of RMU and 5 steps of NPO plus a
+layer-wise logit-lens scan. Pass criteria: both losses decrease, gradients
+flow, and interp values are well-formed. Useful for CI and for verifying a
+local checkout before launching the real GPU run.
 
 ## Run
 

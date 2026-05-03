@@ -1,13 +1,16 @@
 """CLI entry point for the unlearning + interpretability experiment.
 
 Subcommands:
-    prepare-data     : (re)build forget/retain/trivia JSONL files
-    baseline-eval    : evaluate the untouched base model
-    unlearn          : run RMU or NPO and save the unlearned model
-    eval             : evaluate base or an unlearned checkpoint
-    interp           : run all four interpretability analyses
-    report           : assemble a markdown summary table
-    run-all          : do all of the above end-to-end
+    prepare-data        : (re)build forget/retain/trivia JSONL files
+    baseline-eval       : evaluate the untouched base model
+    unlearn             : run RMU, NPO, or TAR (TAR builds on the RMU checkpoint)
+    eval                : evaluate base or an unlearned checkpoint
+    interp              : run all four interpretability analyses
+    report              : assemble a markdown summary table
+    run-all             : do all of the above end-to-end (Phase 1)
+    train-probes        : (Phase 2) train frozen 'is forget' probes on the base model
+    attack-trajectory   : (Phase 2) SFT-recovery attack with per-step mechanistic dumps
+    plot-hypotheses     : (Phase 2) render H1/H2/H3 verdict plots + trajectory overview
 """
 from __future__ import annotations
 
@@ -93,18 +96,26 @@ def cmd_baseline_eval(args) -> None:
 def cmd_unlearn(args) -> None:
     cfg = _load_cfg(args)
     facts = _load_facts(cfg)
-    model, tok = _load_model(cfg, "base")
 
     if args.method == "rmu":
+        model, tok = _load_model(cfg, "base")
         from src.rmu import save, train_rmu
         stats = train_rmu(cfg, model, tok, facts["forget"], facts["retain"])
         out = save(model, cfg, "rmu")
     elif args.method == "npo":
+        model, tok = _load_model(cfg, "base")
         from src.npo import train_npo
         stats = train_npo(cfg, model, tok, facts["forget"], facts["retain"])
         out = cfg.abspath(cfg.paths.checkpoints) / "npo"
         out.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(out)
+    elif args.method == "tar":
+        # TAR-1 starts from the RMU-edited checkpoint by default.
+        start = getattr(args, "start", "rmu")
+        model, tok = _load_model(cfg, start)
+        from src.tar import save, train_tar
+        stats = train_tar(cfg, model, tok, facts["forget"], facts["retain"])
+        out = save(model, cfg, "tar")
     else:
         raise ValueError(args.method)
 
@@ -203,20 +214,21 @@ def cmd_report(args) -> None:
     cfg = _load_cfg(args)
     metrics_dir = cfg.abspath(cfg.paths.metrics)
     base = json.loads((metrics_dir / "base.json").read_text())
-    rows = [("metric", "base", "rmu", "npo")]
-    method_files = {m: metrics_dir / f"{m}.json" for m in ("rmu", "npo")}
+    methods = ("rmu", "npo", "tar")
+    header = ("metric", "base", *methods)
+    rows = [header]
+    method_files = {m: metrics_dir / f"{m}.json" for m in methods}
     others = {m: (json.loads(p.read_text()) if p.exists() else {}) for m, p in method_files.items()}
     keys = ["forget_em", "forget_paraphrase_em", "retain_em", "trivia_em", "wikitext_ppl"]
     for k in keys:
         rows.append((
             k,
             f"{base.get(k, float('nan')):.4f}",
-            f"{others['rmu'].get(k, float('nan')):.4f}",
-            f"{others['npo'].get(k, float('nan')):.4f}",
+            *(f"{others[m].get(k, float('nan')):.4f}" for m in methods),
         ))
     md = ["# Unlearning experiment results", ""]
     md.append("| " + " | ".join(rows[0]) + " |")
-    md.append("|" + "|".join(["---"] * 4) + "|")
+    md.append("|" + "|".join(["---"] * len(header)) + "|")
     for r in rows[1:]:
         md.append("| " + " | ".join(r) + " |")
     out = cfg.abspath(cfg.paths.metrics) / "REPORT.md"
@@ -237,6 +249,77 @@ def cmd_run_all(args) -> None:
     cmd_report(args)
 
 
+# --- Phase 2 subcommands ---------------------------------------------------
+
+def cmd_train_probes(args) -> None:
+    """Train the frozen 'is forget' probes on the BASE model. Used by attack-trajectory."""
+    cfg = _load_cfg(args)
+    assert cfg.trajectory is not None, "config.yaml needs a `trajectory:` block"
+    facts = _load_facts(cfg)
+    base_model, tok = _load_model(cfg, "base")
+    from src.probes import save_probes, train_probes
+    probes = train_probes(
+        base_model, tok,
+        facts["forget"], facts["retain"],
+        layers=list(cfg.trajectory.layers),
+        device=cfg.device,
+        max_seq_len=cfg.train.max_seq_len,
+        train_frac=cfg.trajectory.probe_train_frac,
+        C=cfg.trajectory.probe_C,
+        seed=cfg.seed,
+    )
+    out = save_probes(probes, cfg.abspath(cfg.paths.probes))
+    test_accs = [probes[L].test_acc for L in sorted(probes.keys())]
+    print(f"saved {len(probes)} probes -> {out}")
+    print(f"  per-layer test acc range: {min(test_accs):.3f} – {max(test_accs):.3f}")
+
+
+def cmd_attack_trajectory(args) -> None:
+    """Run the SFT-recovery attack on a post-edit checkpoint and dump per-step
+    mechanistic snapshots."""
+    cfg = _load_cfg(args)
+    assert cfg.attacks is not None, "config.yaml needs an `attacks:` block"
+    assert cfg.trajectory is not None, "config.yaml needs a `trajectory:` block"
+
+    facts = _load_facts(cfg)
+    # The unlearned model that the adversary attacks (mutated in place):
+    model, tok = _load_model(cfg, args.method)
+    # The base model — held fixed; used to anchor cosine-to-base:
+    base_model, _ = _load_model(cfg, "base")
+
+    from src.probes import load_probes
+    probes_path = cfg.abspath(cfg.paths.probes)
+    if not probes_path.exists():
+        raise SystemExit(
+            f"probes not found at {probes_path}. Run `train-probes` first."
+        )
+    probes = load_probes(probes_path)
+
+    from src.trajectory import run_trajectory
+    out = run_trajectory(
+        cfg, args.method, model, base_model, tok,
+        facts["forget"], facts["retain"], probes,
+    )
+    print(f"trajectory -> {out}")
+
+
+def cmd_plot_hypotheses(args) -> None:
+    """Render the H1/H2/H3 verdict plots and the master trajectory overview."""
+    import subprocess
+    root = str(ROOT)
+    methods = args.methods
+    scripts = [
+        ROOT / "scripts" / "plot_h1_suppression.py",
+        ROOT / "scripts" / "plot_h2_erasure.py",
+        ROOT / "scripts" / "plot_h3_deepening.py",
+        ROOT / "scripts" / "plot_trajectory_overview.py",
+    ]
+    for s in scripts:
+        cmd = ["python", str(s), "--root", root, "--methods", *methods]
+        print("$", " ".join(cmd))
+        subprocess.run(cmd, check=False)
+
+
 # --- entry -----------------------------------------------------------------
 
 def main() -> None:
@@ -248,19 +331,31 @@ def main() -> None:
     sub.add_parser("baseline-eval").set_defaults(func=cmd_baseline_eval)
 
     s_un = sub.add_parser("unlearn")
-    s_un.add_argument("--method", choices=["rmu", "npo"], required=True)
+    s_un.add_argument("--method", choices=["rmu", "npo", "tar"], required=True)
+    s_un.add_argument("--start", default="rmu",
+                      help="(TAR only) which checkpoint to start from. Default: rmu")
     s_un.set_defaults(func=cmd_unlearn)
 
     s_ev = sub.add_parser("eval")
-    s_ev.add_argument("--method", choices=["base", "rmu", "npo"], required=True)
+    s_ev.add_argument("--method", choices=["base", "rmu", "npo", "tar"], required=True)
     s_ev.set_defaults(func=cmd_eval)
 
     s_in = sub.add_parser("interp")
-    s_in.add_argument("--method", choices=["rmu", "npo"], required=True)
+    s_in.add_argument("--method", choices=["rmu", "npo", "tar"], required=True)
     s_in.set_defaults(func=cmd_interp)
 
     sub.add_parser("report").set_defaults(func=cmd_report)
     sub.add_parser("run-all").set_defaults(func=cmd_run_all)
+
+    sub.add_parser("train-probes").set_defaults(func=cmd_train_probes)
+
+    s_at = sub.add_parser("attack-trajectory")
+    s_at.add_argument("--method", choices=["rmu", "npo", "tar"], required=True)
+    s_at.set_defaults(func=cmd_attack_trajectory)
+
+    s_pl = sub.add_parser("plot-hypotheses")
+    s_pl.add_argument("--methods", nargs="+", default=["rmu", "tar"])
+    s_pl.set_defaults(func=cmd_plot_hypotheses)
 
     args = p.parse_args()
     args.func(args)

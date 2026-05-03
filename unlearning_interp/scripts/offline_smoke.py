@@ -296,6 +296,136 @@ def main() -> int:
     ll = _patched_logit_lens(model, tok, forget, layers, device)
     print(f"    layer-wise acc: {[f'{ll[l]:.2f}' for l in layers]}")
 
+    # ---------- Phase 2: probes ----------
+    print(">>> Phase 2: train + eval frozen probes (binary 'is forget')")
+    # Use a sklearn LR probe directly here (mirrors src/probes.py logic)
+    from sklearn.linear_model import LogisticRegression
+    import numpy as np
+
+    layers_p = [1, 3, 5]
+    probes_smoke = {}
+    facts_all = forget + retain
+    labels_all = np.array([1] * len(forget) + [0] * len(retain), dtype=np.int64)
+    bat_all = tokenize_facts_bytes(facts_all, tok, 96, device)
+    with torch.no_grad():
+        out = model(input_ids=bat_all.input_ids, attention_mask=bat_all.attention_mask,
+                    output_hidden_states=True, use_cache=False)
+    hs = out.hidden_states
+    am = bat_all.attention_mask.unsqueeze(-1).to(hs[0].dtype)
+    rng = np.random.default_rng(0)
+    perm = rng.permutation(len(facts_all))
+    n_train = int(round(len(facts_all) * 0.8))
+    tr_idx, te_idx = perm[:n_train].tolist(), perm[n_train:].tolist()
+    probe_test_accs = []
+    for L in layers_p:
+        h = hs[L]
+        pooled = (h * am).sum(dim=1) / am.sum(dim=1).clamp_min(1)
+        X = pooled.float().cpu().numpy()
+        clf = LogisticRegression(max_iter=2000, C=1.0).fit(X[tr_idx], labels_all[tr_idx])
+        acc = float(clf.score(X[te_idx], labels_all[te_idx]))
+        probe_test_accs.append(acc)
+        probes_smoke[L] = (clf.coef_[0], float(clf.intercept_[0]))
+        print(f"    layer {L}: test_acc={acc:.3f}")
+    probes_in_range = all(0.0 <= a <= 1.0 for a in probe_test_accs)
+
+    # ---------- Phase 2: TAR-1 dry-run (3 outer steps, K=2) ----------
+    print(">>> Phase 2: TAR-1 dry-run (3 outer steps, K=2)")
+    import copy
+    torch.manual_seed(0)
+    tar_model = GPTNeoXForCausalLM(cfg).to(device)
+    tar_frozen = copy.deepcopy(tar_model).eval()
+    for p in tar_frozen.parameters():
+        p.requires_grad_(False)
+    freeze_all(tar_model)
+    tar_trainable = unfreeze_mlp_down(tar_model, [2, 3, 4])
+    tar_optim = torch.optim.AdamW(tar_trainable, lr=5e-5)
+    K = 2
+    inner_lr = 1e-4
+    lam = 1.0
+    tar_losses = []
+    t0 = time.time()
+    for outer in range(3):
+        snapshot = [p.detach().clone() for p in tar_trainable]
+        # inner: K SGD steps on forget NLL
+        for _ in range(K):
+            for p in tar_trainable:
+                if p.grad is not None:
+                    p.grad.zero_()
+            inner_out = tar_model(
+                input_ids=bf.input_ids, attention_mask=bf.attention_mask,
+                labels=bf.labels, use_cache=False,
+            )
+            inner_out.loss.backward()
+            with torch.no_grad():
+                for p in tar_trainable:
+                    if p.grad is not None:
+                        p.data.add_(p.grad, alpha=-inner_lr)
+        # tamper-resistance grad at theta_K
+        for p in tar_trainable:
+            if p.grad is not None:
+                p.grad.zero_()
+        adv = tar_model(
+            input_ids=bf.input_ids, attention_mask=bf.attention_mask,
+            labels=bf.labels, use_cache=False,
+        )
+        adv.loss.backward()
+        tamper_grads = [(-lam * p.grad).detach().clone() if p.grad is not None
+                        else torch.zeros_like(p) for p in tar_trainable]
+        # restore
+        with torch.no_grad():
+            for p, snap in zip(tar_trainable, snapshot):
+                p.data.copy_(snap)
+        # retain anchor at theta_init (MSE on hiddens to frozen ref)
+        for p in tar_trainable:
+            if p.grad is not None:
+                p.grad.zero_()
+        h_r = capture_layer_hidden(tar_model, br.input_ids, br.attention_mask, 3)
+        with torch.no_grad():
+            h_r_ref = capture_layer_hidden(tar_frozen, br.input_ids, br.attention_mask, 3)
+        m = br.attention_mask.unsqueeze(-1).to(h_r.dtype)
+        retain_loss = ((h_r - h_r_ref) ** 2 * m).sum() / m.sum().clamp_min(1.0)
+        retain_loss.backward()
+        retain_grads = [p.grad.detach().clone() if p.grad is not None
+                        else torch.zeros_like(p) for p in tar_trainable]
+        tar_optim.zero_grad()
+        with torch.no_grad():
+            for p, gr, gt in zip(tar_trainable, retain_grads, tamper_grads):
+                p.grad = gr + gt
+        tar_optim.step()
+        tar_losses.append(float(adv.loss.detach()))
+        print(f"    outer {outer}: L_forget@K={tar_losses[-1]:.3f}  L_retain={float(retain_loss):.5f}")
+    tar_dt = time.time() - t0
+    tar_lf_increased = tar_losses[-1] >= tar_losses[0] - 0.5  # not collapsed
+    print(f"    TAR L_forget@K trajectory: {[f'{x:.3f}' for x in tar_losses]}  ({tar_dt:.2f}s)")
+
+    # ---------- Phase 2: SFT-recovery attack with per-step callback ----------
+    print(">>> Phase 2: SFT-recovery attack with per-step callback (10 steps)")
+    snapshots_seen = []
+    sched = {0, 1, 5, 10}
+    sft_step = 0
+    # snapshot before any SFT
+    if 0 in sched:
+        snapshots_seen.append(0)
+    freeze_all(tar_model)
+    sft_trainable = unfreeze_mlp_down(tar_model, [2, 3, 4])
+    sft_optim = torch.optim.AdamW(sft_trainable, lr=5e-5)
+    sft_losses = []
+    while sft_step < 10:
+        out = tar_model(
+            input_ids=bf.input_ids, attention_mask=bf.attention_mask,
+            labels=bf.labels, use_cache=False,
+        )
+        sft_optim.zero_grad()
+        out.loss.backward()
+        sft_optim.step()
+        sft_step += 1
+        sft_losses.append(float(out.loss.detach()))
+        if sft_step in sched:
+            snapshots_seen.append(sft_step)
+    sft_decreased = sft_losses[-1] < sft_losses[0]
+    print(f"    SFT recovery loss: {sft_losses[0]:.3f} -> {sft_losses[-1]:.3f} ({'DROPPED' if sft_decreased else 'NO CHANGE'})")
+    print(f"    snapshots fired at: {snapshots_seen}")
+
     # ---------- summary ----------
     passed = (
         all(torch.isfinite(torch.tensor(losses_rmu)).tolist())
@@ -303,6 +433,10 @@ def main() -> int:
         and rmu_decreased
         and npo_decreased
         and all(0.0 <= v <= 1.0 for v in ll.values())
+        and probes_in_range
+        and tar_lf_increased
+        and sft_decreased
+        and snapshots_seen == [0, 1, 5, 10]
     )
     print()
     print("=" * 64)
@@ -310,6 +444,10 @@ def main() -> int:
     print(f"  rmu_loss_dropped: {rmu_decreased}")
     print(f"  npo_loss_dropped: {npo_decreased}")
     print(f"  interp_values_in_[0,1]: {all(0.0 <= v <= 1.0 for v in ll.values())}")
+    print(f"  probes_in_[0,1]: {probes_in_range}")
+    print(f"  tar_no_collapse: {tar_lf_increased}")
+    print(f"  sft_recovery_loss_dropped: {sft_decreased}")
+    print(f"  snapshots_fired_correctly: {snapshots_seen == [0, 1, 5, 10]}")
     print("=" * 64)
     return 0 if passed else 1
 

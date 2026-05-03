@@ -118,17 +118,101 @@ unlearning_interp/
 │   ├── model_utils.py            # Pythia loader, layer-scope freezing, hooks
 │   ├── rmu.py                    # RMU loss + training loop
 │   ├── npo.py                    # NPO loss + training loop
+│   ├── tar.py                    # (Phase 2) TAR-1 tamper-resistant training
+│   ├── attacks.py                # (Phase 2) SFT-recovery relearning attack
+│   ├── probes.py                 # (Phase 2) frozen 'is forget' linear probes
+│   ├── trajectory.py             # (Phase 2) per-step mechanistic trajectory
 │   ├── eval_harness.py           # exact-match, wikitext PPL, trivia probe
 │   ├── interp.py                 # logit lens, hidden cosine, logit drop, probe
 │   └── plotting.py               # standardized matplotlib helpers
+├── scripts/
+│   ├── offline_smoke.py          # CI-style smoke test (no HF access required)
+│   ├── plot_h1_suppression.py    # (Phase 2) H1 verdict figure
+│   ├── plot_h2_erasure.py        # (Phase 2) H2 verdict figure
+│   ├── plot_h3_deepening.py      # (Phase 2) H3 verdict figure
+│   └── plot_trajectory_overview.py  # (Phase 2) raw 4-panel trajectory plot
 ├── run_experiment.py             # CLI entrypoint
 ├── run_all.sh                    # one-shot pipeline
 └── results/                      # populated by run_all.sh
 ```
 
+# Phase 2 — Mechanistic trajectory of relearning
+
+## Question
+
+When a relearning attack recovers an unlearned fact, is it rebuilding the
+representation from scratch, or just *unblocking* a representation that was
+preserved the whole time? And does TAR's behavioral robustness reflect
+representational erasure or merely a steeper barrier on the same preserved
+path?
+
+We discriminate three hypotheses by tracking layer-wise probe accuracy,
+logit-lens accuracy, and hidden-cosine-to-base **at every step** of an
+SFT-recovery attack:
+
+| Hypothesis | Predicted trajectory shape | Verdict script |
+|---|---|---|
+| **H1 — Suppression** | probe high at t=0 while behavior near 0 | `scripts/plot_h1_suppression.py` |
+| **H2 — Erasure / new pathway** | cosine-to-base stays low while behavior recovers | `scripts/plot_h2_erasure.py` |
+| **H3 — Deepening (buried, not erased)** | probe rises *before* behavior during recovery | `scripts/plot_h3_deepening.py` |
+
+The four plots are:
+- `figures/h1_suppression.png` — at t=0, layer-wise probe accuracy + behavioral EM
+- `figures/h2_erasure.png` — cosine-to-base trajectory + behavioral recovery
+- `figures/h3_deepening.png` — probe(t) vs EM(t) with crossing-time annotations
+- `figures/trajectory_overview_{rmu,tar}.png` — master 4-panel raw data plot
+
+Each verdict script also prints a quantified support level on stdout (STRONG /
+WEAK / REJECTED / INDETERMINATE).
+
+## What's new vs Phase 1
+
+- **TAR-1** (`src/tar.py`) — first-order tamper-resistant training applied on
+  top of an RMU-edited checkpoint. Bilevel: outer minimizes a retain anchor
+  while *increasing* L_forget at the post-adversary-SFT point. K=8 inner SGD
+  steps simulate the adversary; same trainable scope as RMU.
+- **Frozen 'is forget' probes** (`src/probes.py`) — trained once on the BASE
+  model's mean-pooled hidden states, then frozen and reused as a knowledge
+  meter for every (model × step) snapshot.
+- **SFT-recovery attack with per-step callbacks** (`src/attacks.py`) — runs the
+  adversary's targeted SFT and fires a callback at each scheduled step.
+- **Trajectory orchestrator** (`src/trajectory.py`) — at each callback,
+  computes (forget_em, forget_logp_gold, logit_lens_acc[layer],
+  probe_acc[layer], hidden_cosine_to_base[layer]) and dumps a single JSON.
+
+## Run (Phase 2 only)
+
+Phase 2 assumes Phase 1 has already produced the RMU checkpoint. Then:
+
+```bash
+python run_experiment.py unlearn --method tar --start rmu     # ~30-60 min
+python run_experiment.py eval    --method tar
+python run_experiment.py train-probes                          # <1 min
+python run_experiment.py attack-trajectory --method rmu        # ~15 min
+python run_experiment.py attack-trajectory --method tar        # ~15 min
+python run_experiment.py plot-hypotheses --methods rmu tar
+```
+
+Outputs land in `results/metrics/trajectories/{rmu,tar}.json` and
+`results/figures/h{1,2,3}_*.png`.
+
+## Scope and limitations
+
+Pythia-410M is a *mechanistic case study* scale. The point of this experiment
+is to surface and discriminate trajectory hypotheses cheaply, not to claim a
+benchmark number. Comparable trajectory work in the literature
+(arxiv:2410.06606, arxiv:2410.12949, arxiv:2505.09500) reports endpoints
+only, on 7B+ models. Probe-guided relearning attacks (arxiv:2506.01318,
+arxiv:2504.14798) are adjacent prior art for the *attack* construction but
+not for the *trajectory* analysis. Scaling validation is out of scope.
+
 ## Citations
 
-- **RMU**: Li, N., et al. *The WMDP Benchmark: Measuring and Reducing Malicious
-  Use With Unlearning.* arxiv:2403.03218 (2024).
-- **NPO**: Zhang, R., et al. *Negative Preference Optimization: From Catastrophic
-  Collapse to Effective Unlearning.* arxiv:2404.05868 (2024).
+- **RMU**: Li, N., et al. *The WMDP Benchmark.* arxiv:2403.03218 (2024).
+- **NPO**: Zhang, R., et al. *Negative Preference Optimization.* arxiv:2404.05868 (2024).
+- **TAR**: Tamirisa, R., et al. *Tamper-Resistant Safeguards for Open-Weight LLMs.*
+  arxiv:2408.00761 (2024).
+- **Adjacent endpoint analyses**: Hong et al. arxiv:2410.06606; Guo et al.
+  arxiv:2410.12949; Hu et al. arxiv:2505.09500.
+- **Adjacent probe-driven attacks**: Verifying Robust Unlearning arxiv:2504.14798;
+  Prototypical Relearning arxiv:2506.01318.

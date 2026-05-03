@@ -79,7 +79,7 @@ def main() -> int:
     ax.set_ylabel("frozen-probe accuracy on forget vs retain")
     ax.set_title("H1 — SUPPRESSION test  (post-edit model, t=0)\n"
                  "high probe + low EM ⇒ representation preserved despite suppressed behavior")
-    ax.set_ylim(0.4, 1.02)
+    ax.set_ylim(0.0, 1.02)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="lower right")
     fig.tight_layout()

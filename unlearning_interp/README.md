@@ -180,6 +180,32 @@ WEAK / REJECTED / INDETERMINATE).
   computes (forget_em, forget_logp_gold, logit_lens_acc[layer],
   probe_acc[layer], hidden_cosine_to_base[layer]) and dumps a single JSON.
 
+## Run on Modal (single A100-40GB)
+
+If you don't have a local A100, the included Modal script runs the full Phase
+1+2 pipeline on a serverless A100 in ~60–90 minutes:
+
+```bash
+pip install modal && modal token new
+cd unlearning_interp
+modal run scripts/modal_run.py                       # full pipeline, bf16
+modal run scripts/modal_run.py --stage phase2        # if Phase 1 already ran
+modal run scripts/modal_run.py --stage smoke         # CI-style smoke (no GPU work)
+modal volume get copycat-unlearning-results / ./modal_results
+```
+
+Two persistent Modal volumes are created on first run:
+- `hf-cache` — Pythia-410M and wikitext-2 weights/data, reused across runs
+- `copycat-unlearning-results` — checkpoints, metrics, and figures
+
+For gated models (Llama, Mistral) create a Modal secret first:
+
+```bash
+modal secret create huggingface HF_TOKEN=hf_xxxxxxxx
+```
+
+The script picks it up automatically when present.
+
 ## Run (Phase 2 only)
 
 Phase 2 assumes Phase 1 has already produced the RMU checkpoint. Then:

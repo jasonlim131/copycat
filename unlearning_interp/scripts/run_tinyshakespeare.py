@@ -286,7 +286,7 @@ def build_cfg(root: Path) -> Config:
             lr=5e-4, weight_decay=0.0, grad_clip=1.0,
             update_layers=[5],
         ),
-        rmu=RMUCfg(epochs=7, layer_idx=5, c=10.0, alpha=2500.0, retain_coeff=4.0),
+        rmu=RMUCfg(epochs=7, layer_idx=5, c=10.0, alpha=5000.0, retain_coeff=16.0),
         npo=NPOCfg(epochs=2, beta=0.1, retain_kl_coeff=1.0),
         eval=EvalCfg(topk=5, wikitext_split="test[:1%]", wikitext_stride=128, max_new_tokens_pad=4),
         interp=InterpCfg(layers=[0, 1, 2, 3, 4, 5, 6], probe_test_frac=0.2),

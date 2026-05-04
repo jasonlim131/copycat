@@ -29,6 +29,7 @@ class RMUCfg:
     layer_idx: int
     c: float
     alpha: float
+    retain_coeff: float = 1.0
 
 
 @dataclass

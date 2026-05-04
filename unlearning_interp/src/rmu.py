@@ -49,6 +49,7 @@ def rmu_loss(
     u: torch.Tensor,
     c: float,
     alpha: float,
+    retain_coeff: float = 1.0,
 ) -> torch.Tensor:
     """Per-token MSE: forget tokens pulled toward c*u; retain tokens pinned to frozen."""
     h_f = capture_hidden(
@@ -68,7 +69,7 @@ def rmu_loss(
 
     L_forget = ((h_f - target) ** 2 * mask_f).sum() / mask_f.sum().clamp_min(1.0)
     L_retain = ((h_r - h_r_frozen) ** 2 * mask_r).sum() / mask_r.sum().clamp_min(1.0)
-    return alpha * L_forget + L_retain
+    return alpha * L_forget + retain_coeff * L_retain
 
 
 def train_rmu(
@@ -111,6 +112,7 @@ def train_rmu(
                 u=u,
                 c=cfg.rmu.c,
                 alpha=cfg.rmu.alpha,
+                retain_coeff=cfg.rmu.retain_coeff,
             )
             (loss / cfg.train.grad_accum).backward()
             if (step + 1) % cfg.train.grad_accum == 0:

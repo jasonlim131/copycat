@@ -109,11 +109,9 @@ def build_model() -> GPTNeoXForCausalLM:
 
 def pretrain_shakespeare(model, tokens: torch.Tensor, n_steps: int, batch_size: int,
                          ctx: int, lr: float, warmup: int = 100) -> list:
-    """LM pretraining on Shakespeare with AMX bf16 autocast.
+    """LM pretraining on Shakespeare in fp32.
 
-    bf16 has only 7 bits of mantissa, so high learning rates can produce NaN.
-    A linear warmup followed by cosine decay keeps the early-step gradients
-    well-conditioned.
+    Uses a linear warmup followed by cosine decay.
     """
     model.train()
     optim = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01,
@@ -138,8 +136,7 @@ def pretrain_shakespeare(model, tokens: torch.Tensor, n_steps: int, batch_size: 
         starts = torch.randint(0, len(tokens) - ctx - 1, (batch_size,), generator=g)
         x = torch.stack([tokens[s : s + ctx] for s in starts])
         y = torch.stack([tokens[s + 1 : s + ctx + 1] for s in starts])
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            out = model(input_ids=x, labels=y, use_cache=False)
+        out = model(input_ids=x, labels=y, use_cache=False)
         loss = out.loss
         if not torch.isfinite(loss):
             n_nan += 1
@@ -177,13 +174,12 @@ def finetune_on_bios(model, tokenizer, forget_facts, retain_facts, n_epochs: int
         ep_loss = 0.0
         for i in perm.tolist():
             batch = tokenize_facts([facts[i]], tokenizer, max_seq_len, "cpu")
-            with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-                out = model(
-                    input_ids=batch.input_ids,
-                    attention_mask=batch.attention_mask,
-                    labels=batch.labels,
-                    use_cache=False,
-                )
+            out = model(
+                input_ids=batch.input_ids,
+                attention_mask=batch.attention_mask,
+                labels=batch.labels,
+                use_cache=False,
+            )
             loss = out.loss
             optim.zero_grad()
             loss.backward()
@@ -229,11 +225,10 @@ def train_rmu_inplace(cfg, model, frozen_ref, tokenizer, forget_facts, retain_fa
             rbatch = next(ret_iter)
             bf = tok_facts(fbatch, tokenizer, cfg.train.max_seq_len, device)
             br = tok_facts(rbatch, tokenizer, cfg.train.max_seq_len, device)
-            with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-                loss = rmu_loss(
-                    model, frozen_ref, bf, br,
-                    layer_idx=cfg.rmu.layer_idx, u=u, c=cfg.rmu.c, alpha=cfg.rmu.alpha,
-                )
+            loss = rmu_loss(
+                model, frozen_ref, bf, br,
+                layer_idx=cfg.rmu.layer_idx, u=u, c=cfg.rmu.c, alpha=cfg.rmu.alpha,
+            )
             optim.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable, cfg.train.grad_clip)
@@ -328,7 +323,7 @@ def main() -> int:
     tokenizer = ByteTokenizer()
 
     print(">>> [3/9] pretraining on Shakespeare")
-    pretrain_shakespeare(model, shakes_tokens, n_steps=1500, batch_size=32, ctx=64, lr=3e-3)
+    pretrain_shakespeare(model, shakes_tokens, n_steps=1500, batch_size=32, ctx=64, lr=1e-3)
 
     print(">>> [4/9] loading bios")
     forget = read_jsonl(ROOT / "data" / "forget.jsonl")

@@ -282,10 +282,10 @@ def build_cfg(root: Path) -> Config:
         ),
         train=TrainCfg(
             batch_size=4, grad_accum=1, max_seq_len=80,
-            lr=3e-4, weight_decay=0.0, grad_clip=1.0,
-            update_layers=[2, 3, 4],
+            lr=5e-4, weight_decay=0.0, grad_clip=1.0,
+            update_layers=[3, 4, 5],
         ),
-        rmu=RMUCfg(epochs=3, layer_idx=3, c=4.0, alpha=200.0),
+        rmu=RMUCfg(epochs=5, layer_idx=4, c=10.0, alpha=1500.0),
         npo=NPOCfg(epochs=2, beta=0.1, retain_kl_coeff=1.0),
         eval=EvalCfg(topk=5, wikitext_split="test[:1%]", wikitext_stride=128, max_new_tokens_pad=4),
         interp=InterpCfg(layers=[0, 1, 2, 3, 4, 5, 6], probe_test_frac=0.2),
@@ -295,7 +295,7 @@ def build_cfg(root: Path) -> Config:
             sft_lr=3e-4,
             sft_batch_size=4,
             snapshot_steps=[0, 1, 2, 4, 8, 16, 32, 64],
-            train_layers=[2, 3, 4],
+            train_layers=[3, 4, 5],
         ),
         trajectory=TrajectoryCfg(
             layers=[0, 1, 2, 3, 4, 5, 6],

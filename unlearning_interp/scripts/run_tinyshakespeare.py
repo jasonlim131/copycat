@@ -35,8 +35,8 @@ from src.cfg import (
 )
 from src.data_utils import read_jsonl, tokenize_facts
 from src.probes import save_probes, train_probes
-from src.rmu import _get_or_make_steering_vector, rmu_loss
-from src.model_utils import freeze_all, unfreeze_mlp_down
+from src.rmu import rmu_loss
+from src.model_utils import capture_hidden, freeze_all, unfreeze_mlp_down
 from src.trajectory import run_trajectory
 
 
@@ -196,6 +196,36 @@ def finetune_on_bios(model, tokenizer, forget_facts, retain_facts, n_epochs: int
 
 # --- in-script RMU (mirrors src/rmu.py but takes a frozen ref by value) ------
 
+@torch.no_grad()
+def _make_retain_orthogonal_u(frozen_ref, retain_facts, tokenizer, cfg, hidden_size, device):
+    """Sample u orthogonal to the mean retain hidden state at layer_idx.
+
+    Prevents L_forget from pushing in a direction that structurally overlaps
+    with the retain subspace, breaking the geometric deadlock that causes
+    retain EM collapse in small models with identical-template forget/retain data.
+    """
+    from src.data_utils import iter_minibatches, tokenize_facts as tok_facts
+
+    frozen_ref.eval()
+    retain_means = []
+    for batch in iter_minibatches(retain_facts, cfg.train.batch_size):
+        br = tok_facts(batch, tokenizer, cfg.train.max_seq_len, device)
+        h = capture_hidden(frozen_ref, br.input_ids, br.attention_mask, cfg.rmu.layer_idx)
+        # mean over answer-mask positions
+        mask = br.answer_mask.unsqueeze(-1).float()
+        h_mean = (h * mask).sum(dim=(0, 1)) / mask.sum().clamp_min(1.0)
+        retain_means.append(h_mean)
+    retain_dir = torch.stack(retain_means).mean(0)
+    retain_dir = retain_dir / retain_dir.norm().clamp_min(1e-8)
+
+    g = torch.Generator(device="cpu").manual_seed(cfg.seed)
+    u = torch.randn(hidden_size, generator=g)
+    u = u - (u @ retain_dir) * retain_dir   # project out retain direction
+    u = u / u.norm().clamp_min(1e-8)
+    print(f"  steering vector: orthogonalized wrt retain mean (residual cos={float(u @ retain_dir):.4f})")
+    return u.to(device)
+
+
 def train_rmu_inplace(cfg, model, frozen_ref, tokenizer, forget_facts, retain_facts):
     """Same algorithm as src.rmu.train_rmu but accepts a frozen reference model
     object directly instead of reloading from a HF repo (which would fail here)."""
@@ -208,7 +238,7 @@ def train_rmu_inplace(cfg, model, frozen_ref, tokenizer, forget_facts, retain_fa
     freeze_all(model)
     trainable = unfreeze_mlp_down(model, cfg.train.update_layers)
     optim = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
-    u = _get_or_make_steering_vector(cfg, H, device)
+    u = _make_retain_orthogonal_u(frozen_ref, retain_facts, tokenizer, cfg, H, device)
     losses = []
     print(f"  RMU training: epochs={cfg.rmu.epochs}, layer_idx={cfg.rmu.layer_idx}, alpha={cfg.rmu.alpha}, c={cfg.rmu.c}")
 
@@ -284,9 +314,9 @@ def build_cfg(root: Path) -> Config:
         train=TrainCfg(
             batch_size=4, grad_accum=1, max_seq_len=80,
             lr=5e-4, weight_decay=0.0, grad_clip=1.0,
-            update_layers=[5],
+            update_layers=[4, 5],
         ),
-        rmu=RMUCfg(epochs=7, layer_idx=5, c=10.0, alpha=5000.0, retain_coeff=16.0),
+        rmu=RMUCfg(epochs=7, layer_idx=5, c=10.0, alpha=2500.0, retain_coeff=8.0),
         npo=NPOCfg(epochs=2, beta=0.1, retain_kl_coeff=1.0),
         eval=EvalCfg(topk=5, wikitext_split="test[:1%]", wikitext_stride=128, max_new_tokens_pad=4),
         interp=InterpCfg(layers=[0, 1, 2, 3, 4, 5, 6], probe_test_frac=0.2),

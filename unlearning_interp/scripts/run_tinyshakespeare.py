@@ -315,30 +315,38 @@ def main() -> int:
     seed_everything(cfg.seed)
     torch.set_num_threads(4)
 
-    print(">>> [1/9] downloading TinyShakespeare")
-    shakes_tokens = fetch_shakespeare(ROOT / "results" / "tinyshakespeare.txt")
-
-    print(">>> [2/9] building tiny GPT-NeoX")
-    model = build_model()
     tokenizer = ByteTokenizer()
+    base_dir = cfg.abspath(cfg.paths.checkpoints) / "tinyshakes_base"
 
-    print(">>> [3/9] pretraining on Shakespeare")
-    pretrain_shakespeare(model, shakes_tokens, n_steps=1500, batch_size=32, ctx=64, lr=1e-3)
-
-    print(">>> [4/9] loading bios")
     forget = read_jsonl(ROOT / "data" / "forget.jsonl")
     retain = read_jsonl(ROOT / "data" / "retain.jsonl")
-    print(f"    forget={len(forget)}  retain={len(retain)}")
 
-    print(">>> [5/9] fine-tuning on bios (until they're memorized)")
-    finetune_on_bios(model, tokenizer, forget, retain, n_epochs=30, lr=3e-4, max_seq_len=cfg.train.max_seq_len)
-    em_after_finetune = forget_em(model, tokenizer, forget[:20], cfg.eval.max_new_tokens_pad)
-    print(f"    forget EM after finetune (20 facts): {em_after_finetune:.3f}")
+    if base_dir.exists():
+        print(f">>> [1-5/9] loading cached base model from {base_dir}  (skip pretrain+finetune)")
+        model = GPTNeoXForCausalLM.from_pretrained(str(base_dir))
+        em_after_finetune = forget_em(model, tokenizer, forget[:20], cfg.eval.max_new_tokens_pad)
+        print(f"    forget={len(forget)}  retain={len(retain)}  base forget EM={em_after_finetune:.3f}")
+    else:
+        print(">>> [1/9] downloading TinyShakespeare")
+        shakes_tokens = fetch_shakespeare(ROOT / "results" / "tinyshakespeare.txt")
 
-    # Save the post-finetune model — that's our 'base' for the experiment.
-    base_dir = cfg.abspath(cfg.paths.checkpoints) / "tinyshakes_base"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(base_dir)
+        print(">>> [2/9] building tiny GPT-NeoX")
+        model = build_model()
+
+        print(">>> [3/9] pretraining on Shakespeare")
+        pretrain_shakespeare(model, shakes_tokens, n_steps=1500, batch_size=32, ctx=64, lr=1e-3)
+
+        print(">>> [4/9] loading bios")
+        print(f"    forget={len(forget)}  retain={len(retain)}")
+
+        print(">>> [5/9] fine-tuning on bios (until they're memorized)")
+        finetune_on_bios(model, tokenizer, forget, retain, n_epochs=30, lr=3e-4, max_seq_len=cfg.train.max_seq_len)
+        em_after_finetune = forget_em(model, tokenizer, forget[:20], cfg.eval.max_new_tokens_pad)
+        print(f"    forget EM after finetune (20 facts): {em_after_finetune:.3f}")
+
+        base_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(base_dir)
+
     base_model_for_traj = copy.deepcopy(model).eval()
     for p in base_model_for_traj.parameters():
         p.requires_grad_(False)

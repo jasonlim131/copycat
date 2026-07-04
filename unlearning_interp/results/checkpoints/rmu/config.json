@@ -26,7 +26,7 @@
     "rope_type": "default"
   },
   "tie_word_embeddings": true,
-  "transformers_version": "5.7.0",
+  "transformers_version": "5.13.0",
   "use_cache": true,
   "use_parallel_residual": true,
   "vocab_size": 260

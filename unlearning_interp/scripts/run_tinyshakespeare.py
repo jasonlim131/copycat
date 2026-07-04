@@ -23,11 +23,55 @@ import time
 import urllib.request
 from pathlib import Path
 
+# --- bootstrap: install requirements if missing ------------------------------
+
+def _bootstrap_requirements() -> None:
+    """pip-install from requirements.txt on a fresh environment."""
+    req_file = Path(__file__).resolve().parents[1] / "requirements.txt"
+    if not req_file.exists():
+        return
+    try:
+        import torch          # noqa: F401
+        import transformers   # noqa: F401
+        import sklearn        # noqa: F401
+    except ImportError:
+        print("  bootstrapping: pip install -r requirements.txt …", flush=True)
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "-r", str(req_file)],
+            check=True,
+        )
+        print("  done.", flush=True)
+
+_bootstrap_requirements()
+
+# ----------------------------------------------------------------------------
+
 import torch
 from transformers import BatchEncoding, GPTNeoXConfig, GPTNeoXForCausalLM
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# --- clone official WMDP RMU repo (forward_with_cache) -----------------------
+
+WMDP_REPO_URL = "https://github.com/centerforaisafety/wmdp.git"
+WMDP_CACHE = Path.home() / ".cache" / "wmdp_rmu"
+
+def _ensure_wmdp_repo() -> None:
+    if not WMDP_CACHE.exists():
+        print(f"  cloning WMDP RMU repo to {WMDP_CACHE} …")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", WMDP_REPO_URL, str(WMDP_CACHE)],
+            check=True, capture_output=True,
+        )
+        print("  done.")
+    if str(WMDP_CACHE) not in sys.path:
+        sys.path.insert(0, str(WMDP_CACHE))
+
+_ensure_wmdp_repo()
+from rmu.utils import forward_with_cache  # official activation-capture hook  # noqa: E402
+
+# -----------------------------------------------------------------------------
 
 from src.cfg import (
     AttacksCfg, Config, EvalCfg, InterpCfg, NPOCfg, Paths, RMUCfg, TARCfg,
@@ -35,8 +79,7 @@ from src.cfg import (
 )
 from src.data_utils import read_jsonl, tokenize_facts
 from src.probes import save_probes, train_probes
-from src.rmu import rmu_loss
-from src.model_utils import capture_hidden, freeze_all, unfreeze_mlp_down
+from src.model_utils import freeze_all, unfreeze_mlp_down
 from src.trajectory import run_trajectory
 
 
@@ -194,78 +237,129 @@ def finetune_on_bios(model, tokenizer, forget_facts, retain_facts, n_epochs: int
     return losses
 
 
-# --- in-script RMU (mirrors src/rmu.py but takes a frozen ref by value) ------
+# --- RMU via official WMDP forward_with_cache --------------------------------
+# Uses forward_with_cache() from the cloned wmdp/rmu/utils.py for activation
+# capture (hook-based, identical to the paper's implementation).  Loss formula
+# mirrors rmu/unlearn.py: MSE(forget_acts, control_vec) + alpha*MSE(retain_acts,
+# frozen_retain_acts).  Note: official "alpha" scales the RETAIN term; our
+# cfg.rmu.alpha scales the FORGET term — we keep our naming and pass
+# retain_coeff as the retain weight so configs are backward-compatible.
+
+def _neox_module(model, layer_id: int):
+    """Return the GPT-NeoX transformer block used as the hook target."""
+    return model.gpt_neox.layers[layer_id]
+
 
 @torch.no_grad()
-def _make_retain_orthogonal_u(frozen_ref, retain_facts, tokenizer, cfg, hidden_size, device):
-    """Sample u orthogonal to the mean retain hidden state at layer_idx.
+def _make_control_vector(frozen_ref, retain_facts, tokenizer, cfg, hidden_size, device):
+    """Build a retain-orthogonal unit steering vector (shape [1,1,H]), scaled by c.
 
-    Prevents L_forget from pushing in a direction that structurally overlaps
-    with the retain subspace, breaking the geometric deadlock that causes
-    retain EM collapse in small models with identical-template forget/retain data.
+    Mirrors the official random_vector / norm * steering_coeff construction but
+    projects out the mean retain direction first so L_forget doesn't structurally
+    overlap with the retain subspace.
     """
     from src.data_utils import iter_minibatches, tokenize_facts as tok_facts
 
+    # Collect mean retain activations at hook layer from frozen reference
     frozen_ref.eval()
-    retain_means = []
+    retain_acts = []
+    layer_id = cfg.rmu.layer_idx
+    frozen_module = _neox_module(frozen_ref, layer_id)
     for batch in iter_minibatches(retain_facts, cfg.train.batch_size):
         br = tok_facts(batch, tokenizer, cfg.train.max_seq_len, device)
-        h = capture_hidden(frozen_ref, br.input_ids, br.attention_mask, cfg.rmu.layer_idx)
-        # mean over answer-mask positions
-        mask = br.answer_mask.unsqueeze(-1).float()
-        h_mean = (h * mask).sum(dim=(0, 1)) / mask.sum().clamp_min(1.0)
-        retain_means.append(h_mean)
-    retain_dir = torch.stack(retain_means).mean(0)
+        inputs = {"input_ids": br.input_ids, "attention_mask": br.attention_mask}
+        h = forward_with_cache(frozen_ref, inputs, module=frozen_module, no_grad=True)
+        retain_acts.append(h.mean(dim=(0, 1)))   # [H]
+    retain_dir = torch.stack(retain_acts).mean(0)
     retain_dir = retain_dir / retain_dir.norm().clamp_min(1e-8)
 
+    # Sample random vector (Gaussian, like rmu.py), project out retain direction
     g = torch.Generator(device="cpu").manual_seed(cfg.seed)
     u = torch.randn(hidden_size, generator=g)
-    u = u - (u @ retain_dir) * retain_dir   # project out retain direction
+    u = u - (u @ retain_dir) * retain_dir
     u = u / u.norm().clamp_min(1e-8)
-    print(f"  steering vector: orthogonalized wrt retain mean (residual cos={float(u @ retain_dir):.4f})")
-    return u.to(device)
+    control_vec = (cfg.rmu.c * u).to(device).reshape(1, 1, hidden_size)
+    print(f"  control vector: c={cfg.rmu.c}, retain-orthogonal "
+          f"(residual cos={float(u @ retain_dir):.4f})")
+    return control_vec
 
 
 def train_rmu_inplace(cfg, model, frozen_ref, tokenizer, forget_facts, retain_facts):
-    """Same algorithm as src.rmu.train_rmu but accepts a frozen reference model
-    object directly instead of reloading from a HF repo (which would fail here)."""
-    from tqdm import tqdm
+    """RMU via official WMDP forward_with_cache.
 
+    Uses forward_with_cache() from wmdp/rmu/utils.py for hook-based activation
+    capture. Loss formula mirrors rmu/unlearn.py: MSE to control vector on forget,
+    MSE to frozen activations on retain.  AdamW from torch (transformers dropped
+    it in v5), parameter scope via our freeze_all + unfreeze_mlp_down.
+    """
     from src.data_utils import iter_minibatches, tokenize_facts as tok_facts
 
     device = cfg.device
     H = model.config.hidden_size
+    layer_id = cfg.rmu.layer_idx
+
     freeze_all(model)
     trainable = unfreeze_mlp_down(model, cfg.train.update_layers)
+    # torch.optim.AdamW — transformers.AdamW was removed in transformers>=5.0
     optim = torch.optim.AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
-    u = _make_retain_orthogonal_u(frozen_ref, retain_facts, tokenizer, cfg, H, device)
-    losses = []
-    print(f"  RMU training: epochs={cfg.rmu.epochs}, layer_idx={cfg.rmu.layer_idx}, alpha={cfg.rmu.alpha}, c={cfg.rmu.c}")
+
+    control_vec = _make_control_vector(frozen_ref, retain_facts, tokenizer, cfg, H, device)
+
+    updated_module = _neox_module(model, layer_id)
+    frozen_module  = _neox_module(frozen_ref, layer_id)
+
+    print(f"  RMU (official forward_with_cache): epochs={cfg.rmu.epochs}, "
+          f"layer_idx={layer_id}, alpha={cfg.rmu.alpha}, "
+          f"retain_coeff={cfg.rmu.retain_coeff}, c={cfg.rmu.c}")
 
     def cycle(facts):
         while True:
             for b in iter_minibatches(facts, cfg.train.batch_size):
                 yield b
 
+    losses = []
     model.train()
     for epoch in range(cfg.rmu.epochs):
         ret_iter = cycle(retain_facts)
         forget_batches = list(iter_minibatches(forget_facts, cfg.train.batch_size))
-        for step, fbatch in enumerate(forget_batches):
+        for fbatch in forget_batches:
             rbatch = next(ret_iter)
             bf = tok_facts(fbatch, tokenizer, cfg.train.max_seq_len, device)
             br = tok_facts(rbatch, tokenizer, cfg.train.max_seq_len, device)
-            loss = rmu_loss(
-                model, frozen_ref, bf, br,
-                layer_idx=cfg.rmu.layer_idx, u=u, c=cfg.rmu.c, alpha=cfg.rmu.alpha,
-                retain_coeff=cfg.rmu.retain_coeff,
+
+            f_inputs = {"input_ids": bf.input_ids, "attention_mask": bf.attention_mask}
+            r_inputs = {"input_ids": br.input_ids, "attention_mask": br.attention_mask}
+
+            # Forget loss: MSE of updated activations to control vector
+            updated_forget = forward_with_cache(
+                model, f_inputs, module=updated_module, no_grad=False
             )
+            L_forget = torch.nn.functional.mse_loss(
+                updated_forget, control_vec.expand_as(updated_forget)
+            )
+
+            # Retain loss: MSE of updated vs frozen activations (all positions)
+            updated_retain = forward_with_cache(
+                model, r_inputs, module=updated_module, no_grad=False
+            )
+            with torch.no_grad():
+                frozen_retain = forward_with_cache(
+                    frozen_ref, r_inputs, module=frozen_module, no_grad=True
+                )
+            L_retain = torch.nn.functional.mse_loss(updated_retain, frozen_retain)
+
+            # alpha scales forget (our convention); retain_coeff scales retain
+            loss = cfg.rmu.alpha * L_forget + cfg.rmu.retain_coeff * L_retain
+
             optim.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable, cfg.train.grad_clip)
             optim.step()
             losses.append(float(loss.detach()))
-        print(f"    RMU epoch {epoch+1}/{cfg.rmu.epochs}: last loss {losses[-1]:.3f}")
+
+        print(f"    RMU epoch {epoch+1}/{cfg.rmu.epochs}: "
+              f"loss={losses[-1]:.3f}  L_forget={float(L_forget):.4f}  L_retain={float(L_retain):.4f}")
+
     model.eval()
     return losses
 
